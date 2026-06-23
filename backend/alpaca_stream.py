@@ -39,7 +39,8 @@ class MarketDataManager:
 
     async def start(self):
         if self._demo_mode:
-            await self._run_demo()
+            self._seed_demo_history()
+            asyncio.create_task(self._run_demo())
             return
 
         await self._seed_history()
@@ -115,16 +116,12 @@ class MarketDataManager:
 
     # ── Demo mode (synthetic prices for UI testing) ───────────────────────────
 
-    async def _run_demo(self):
+    def _seed_demo_history(self):
         import random
-        prices = {t: 150.0 + random.uniform(-50, 200) for t in self.tickers}
-        volumes = {t: random.randint(1_000_000, 10_000_000) for t in self.tickers}
-
-        # Seed 60 synthetic daily bars
         for ticker in self.tickers:
             rows = []
-            p = prices[ticker]
-            for i in range(60):
+            p = 150.0 + random.uniform(-50, 200)
+            for _ in range(60):
                 p *= 1 + random.gauss(0, 0.012)
                 rows.append({
                     "open": round(p * 0.999, 2),
@@ -137,6 +134,8 @@ class MarketDataManager:
             self._bars[ticker] = pd.DataFrame(rows, index=idx)
             self._latest_price[ticker] = round(p, 2)
 
+    async def _run_demo(self):
+        import random
         # Emit a new bar every 5 seconds to simulate live updates
         while True:
             for ticker in self.tickers:
