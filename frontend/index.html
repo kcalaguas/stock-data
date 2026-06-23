@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Signal Dashboard</title>
+  <!-- React + Recharts via CDN (no build step needed) -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #58a6ff; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #3fb950;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .status-dot.disconnected { background: #f85149; animation: none; }
+    main { padding: 20px 24px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 16px;
+      transition: border-color 0.3s;
+    }
+    .card.signal-buy  { border-color: #3fb950; box-shadow: 0 0 12px #3fb95033; }
+    .card.signal-sell { border-color: #f85149; box-shadow: 0 0 12px #f8514933; }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .ticker { font-size: 1.2rem; font-weight: 700; }
+    .price  { font-size: 1.5rem; font-weight: 700; }
+    .price-change { font-size: 0.8rem; opacity: 0.7; }
+    .indicators { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+    .ind-row { display: flex; justify-content: space-between; font-size: 0.82rem; padding: 4px 8px; background: #0d1117; border-radius: 6px; }
+    .ind-label { color: #8b949e; }
+    .ind-val   { font-weight: 600; }
+    .badge {
+      font-size: 0.7rem; font-weight: 700; padding: 2px 8px;
+      border-radius: 20px; text-transform: uppercase;
+    }
+    .badge-buy  { background: #1a4731; color: #3fb950; }
+    .badge-sell { background: #4a1c1c; color: #f85149; }
+    .badge-info { background: #1c2d4a; color: #58a6ff; }
+    .signal-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .alert-feed {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .alert-feed h2 { font-size: 0.95rem; margin-bottom: 12px; color: #8b949e; }
+    .alert-list { max-height: 300px; overflow-y: auto; }
+    .alert-item {
+      display: flex; gap: 12px; align-items: center;
+      padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 0.83rem;
+    }
+    .alert-time { color: #8b949e; white-space: nowrap; flex-shrink: 0; }
+    .rsi-bar { height: 6px; background: #21262d; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+    .rsi-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+    .toolbar input {
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; padding: 6px 12px; font-size: 0.85rem; width: 140px;
+    }
+    .btn {
+      background: #238636; border: none; border-radius: 6px;
+      color: #fff; padding: 6px 14px; cursor: pointer; font-size: 0.85rem;
+    }
+    .btn:hover { background: #2ea043; }
+    .btn-danger { background: #b91c1c; }
+    .btn-danger:hover { background: #dc2626; }
+    .loading { color: #8b949e; text-align: center; padding: 60px; font-size: 1rem; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function rsiColor(rsi) {
+  if (rsi == null) return '#8b949e';
+  if (rsi <= 30) return '#3fb950';
+  if (rsi >= 70) return '#f85149';
+  return '#e3b341';
+}
+
+function formatTime(iso) {
+  const d = new Date(iso + (iso.endsWith('Z') ? '' : 'Z'));
+  return d.toLocaleTimeString();
+}
+
+// ── StockCard ────────────────────────────────────────────────────────────────
+
+function StockCard({ ticker, ind, signals, onRemove }) {
+  if (!ind) return (
+    <div className="card">
+      <div className="card-header">
+        <span className="ticker">{ticker}</span>
+        <button className="btn btn-danger" style={{padding:'2px 8px',fontSize:'0.75rem'}} onClick={() => onRemove(ticker)}>×</button>
+      </div>
+      <div style={{color:'#8b949e',fontSize:'0.85rem'}}>Waiting for data…</div>
+    </div>
+  );
+
+  const hasBuy  = signals.some(s => s.direction === 'BUY');
+  const hasSell = signals.some(s => s.direction === 'SELL');
+  const cardClass = `card${hasBuy ? ' signal-buy' : hasSell ? ' signal-sell' : ''}`;
+
+  return (
+    <div className={cardClass}>
+      <div className="card-header">
+        <div>
+          <div className="ticker">{ticker}</div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div className="price">${ind.price?.toFixed(2)}</div>
+          <button className="btn btn-danger" style={{padding:'2px 8px',fontSize:'0.75rem',marginTop:4}} onClick={() => onRemove(ticker)}>Remove</button>
+        </div>
+      </div>
+
+      {/* Signal badges */}
+      {signals.length > 0 && (
+        <div className="signal-badges">
+          {signals.map((s, i) => (
+            <span key={i} className={`badge badge-${s.direction.toLowerCase()}`}>
+              {s.signal_type.replace(/_/g,' ')}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Indicators grid */}
+      <div className="indicators">
+        <div className="ind-row">
+          <span className="ind-label">RSI(14)</span>
+          <span className="ind-val" style={{color: rsiColor(ind.rsi)}}>{ind.rsi ?? '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">MACD Hist</span>
+          <span className="ind-val" style={{color: ind.macd_hist > 0 ? '#3fb950' : '#f85149'}}>
+            {ind.macd_hist?.toFixed(3) ?? '—'}
+          </span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">EMA 9</span>
+          <span className="ind-val">{ind.ema9?.toFixed(2) ?? '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">EMA 21</span>
+          <span className="ind-val">{ind.ema21?.toFixed(2) ?? '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">BB Upper</span>
+          <span className="ind-val">{ind.bb_upper?.toFixed(2) ?? '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">BB Lower</span>
+          <span className="ind-val">{ind.bb_lower?.toFixed(2) ?? '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">BB Width</span>
+          <span className="ind-val">{ind.bb_width != null ? (ind.bb_width * 100).toFixed(2) + '%' : '—'}</span>
+        </div>
+        <div className="ind-row">
+          <span className="ind-label">Vol ×avg</span>
+          <span className="ind-val" style={{color: ind.volume_ratio >= 2 ? '#e3b341' : '#e6edf3'}}>
+            {ind.volume_ratio?.toFixed(1) ?? '—'}×
+          </span>
+        </div>
+      </div>
+
+      {/* RSI bar */}
+      {ind.rsi != null && (
+        <div style={{marginTop:10}}>
+          <div style={{fontSize:'0.72rem',color:'#8b949e',marginBottom:3}}>RSI gauge</div>
+          <div className="rsi-bar">
+            <div className="rsi-fill" style={{width:`${ind.rsi}%`, background: rsiColor(ind.rsi)}} />
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:'0.68rem',color:'#8b949e',marginTop:2}}>
+            <span>0 oversold</span><span>overbought 100</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AlertFeed ────────────────────────────────────────────────────────────────
+
+function AlertFeed({ alerts }) {
+  return (
+    <div className="alert-feed">
+      <h2>Signal Feed</h2>
+      <div className="alert-list">
+        {alerts.length === 0 && <div style={{color:'#8b949e',fontSize:'0.85rem'}}>No signals fired yet.</div>}
+        {alerts.map((a, i) => (
+          <div key={i} className="alert-item">
+            <span className={`badge badge-${a.direction.toLowerCase()}`}>{a.direction}</span>
+            <span style={{fontWeight:600}}>{a.ticker}</span>
+            <span style={{color:'#8b949e'}}>{a.signal_type.replace(/_/g,' ')}</span>
+            <span>${a.price?.toFixed(2)}</span>
+            <span className="alert-time">{formatTime(a.fired_at)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [tickers, setTickers]       = useState([]);
+  const [indicators, setIndicators] = useState({});
+  const [signalMap, setSignalMap]   = useState({});   // ticker → [signals]
+  const [alerts, setAlerts]         = useState([]);
+  const [connected, setConnected]   = useState(false);
+  const [newTicker, setNewTicker]   = useState('');
+  const wsRef = useRef(null);
+
+  const connect = useCallback(() => {
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    wsRef.current = ws;
+
+    ws.onopen  = () => setConnected(true);
+    ws.onclose = () => { setConnected(false); setTimeout(connect, 3000); };
+    ws.onerror = () => ws.close();
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'SNAPSHOT') {
+        setTickers(msg.data.tickers);
+        setIndicators(msg.data.indicators);
+      } else if (msg.type === 'TICK') {
+        setIndicators(prev => ({ ...prev, [msg.ticker]: msg.data }));
+      } else if (msg.type === 'SIGNAL') {
+        const sig = msg.data;
+        setSignalMap(prev => ({
+          ...prev,
+          [sig.ticker]: [...(prev[sig.ticker] || []).slice(-4), sig],
+        }));
+        setAlerts(prev => [{ ...sig, fired_at: new Date().toISOString() }, ...prev].slice(0, 200));
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    connect();
+    // Load historical alerts
+    fetch('/api/alerts').then(r => r.json()).then(setAlerts);
+    return () => wsRef.current?.close();
+  }, [connect]);
+
+  async function addTicker() {
+    if (!newTicker.trim()) return;
+    const res = await fetch('/api/watchlist', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ticker: newTicker.trim().toUpperCase() }),
+    });
+    const data = await res.json();
+    setTickers(data.tickers);
+    setNewTicker('');
+  }
+
+  async function removeTicker(ticker) {
+    const res = await fetch(`/api/watchlist/${ticker}`, { method: 'DELETE' });
+    const data = await res.json();
+    setTickers(data.tickers);
+  }
+
+  return (
+    <>
+      <header>
+        <div className={`status-dot${connected ? '' : ' disconnected'}`} />
+        <h1>Stock Signal Dashboard</h1>
+        <span style={{fontSize:'0.8rem',color:'#8b949e',marginLeft:'auto'}}>
+          {connected ? 'Live' : 'Reconnecting…'}
+        </span>
+      </header>
+      <main>
+        {/* Add ticker toolbar */}
+        <div className="toolbar">
+          <input
+            value={newTicker}
+            onChange={e => setNewTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && addTicker()}
+            placeholder="Add ticker…"
+            maxLength={8}
+          />
+          <button className="btn" onClick={addTicker}>+ Add</button>
+        </div>
+
+        {/* Stock cards */}
+        <div className="grid">
+          {tickers.map(ticker => (
+            <StockCard
+              key={ticker}
+              ticker={ticker}
+              ind={indicators[ticker]}
+              signals={signalMap[ticker] || []}
+              onRemove={removeTicker}
+            />
+          ))}
+          {tickers.length === 0 && (
+            <div className="loading">Add tickers to your watchlist to get started.</div>
+          )}
+        </div>
+
+        {/* Alert feed */}
+        <AlertFeed alerts={alerts} />
+      </main>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
