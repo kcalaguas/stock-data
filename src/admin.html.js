@@ -22,7 +22,7 @@ function renderAdminPage(businesses, tapStats, errorMsg, successMsg) {
           </div>
           <div class="business-actions">
             <button class="btn btn-copy" onclick="copyLink('${escHtml(nfcUrl)}', this)">Copy NFC Link</button>
-            <button class="btn btn-edit" onclick="openEdit(${JSON.stringify(JSON.stringify(b))})">Edit</button>
+            <button class="btn btn-edit" onclick="openEdit('${b.id}')">Edit</button>
           </div>
         </div>
         <div class="stats-row">
@@ -200,6 +200,8 @@ function renderAdminPage(businesses, tapStats, errorMsg, successMsg) {
 </div>
 
 <script>
+var BUSINESSES = ${JSON.stringify(businesses)};
+
 function copyLink(url, btn) {
   navigator.clipboard.writeText(url).then(() => {
     btn.textContent = 'Copied!';
@@ -208,8 +210,9 @@ function copyLink(url, btn) {
   });
 }
 
-function openEdit(jsonStr) {
-  const b = JSON.parse(jsonStr);
+function openEdit(id) {
+  const b = BUSINESSES.find(function(x){ return x.id === id; });
+  if (!b) return;
   document.getElementById('edit_id').value = b.id;
   document.getElementById('edit_name').value = b.name;
   document.getElementById('edit_slug').value = b.slug;
